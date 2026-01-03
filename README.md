@@ -34,16 +34,23 @@ Example:
 python xml_to_appian_recordtype_md.py recordtype-xml\example.xml -o out\example.md --title "Example Record Type Context Reference"
 ```
 
-### Directory of XML files
+### Directory of XML files or Zipped Appian Application Export
 
-`map_xml_to_appian_recordtype_md.py` converts all `*.xml` files in a directory to markdown files.
+`map_xml_to_appian_recordtype_md.py` converts all `*.xml` files from either a directory or a zipped Appian application export to markdown files.
 
+**For a directory:**
 ```bash
 python map_xml_to_appian_recordtype_md.py recordtype-xml
 ```
 
+**For a zipped Appian application export:**
+```bash
+python map_xml_to_appian_recordtype_md.py path\to\application-export.zip
+```
+
 Optional flags:
-- `-o` / `--output_dir`: output directory (defaults to the input directory)
+- `-o` / `--output_dir`: output directory (defaults to the input directory for directories, or current directory for zip files)
+- `-f` / `--folder`: specific folder path within the zip file to search for recordType XML files (only used when input is a zip file)
 
 Output filenames follow the pattern:
 

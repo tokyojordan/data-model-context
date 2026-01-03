@@ -5,6 +5,8 @@ import argparse
 import re
 from pathlib import Path
 import xml.etree.ElementTree as ET
+from zipfile import ZipFile
+from io import BytesIO
 
 A_NS = "http://www.appian.com/ae/types/2009"
 NS = {"a": A_NS}
@@ -47,13 +49,14 @@ def friendly_type(type_text: str) -> str:
     return TYPE_MAP.get(t, t)
 
 
-def parse_recordtype(xml_path: Path) -> dict:
-    tree = ET.parse(xml_path)
+def parse_recordtype_from_file(file_obj) -> dict:
+    """Parse record type from a file object or path."""
+    tree = ET.parse(file_obj)
     root = tree.getroot()
 
     rt = root.find("recordType")
     if rt is None:
-        raise ValueError(f"No <recordType> found in {xml_path}")
+        raise ValueError("No <recordType> found in XML")
 
     rt_uuid = rt.attrib.get(f"{{{A_NS}}}uuid") or rt.attrib.get("uuid") or ""
     rt_name = rt.attrib.get("name") or ""
@@ -162,6 +165,7 @@ def render_markdown(rt: dict, doc_title: str) -> str:
 
 
 def process_directory(in_dir: Path, out_dir: Path) -> int:
+    """Process XML files from a regular directory."""
     out_dir.mkdir(parents=True, exist_ok=True)
 
     xml_files = sorted(in_dir.glob("*.xml"))
@@ -172,7 +176,7 @@ def process_directory(in_dir: Path, out_dir: Path) -> int:
     count_ok = 0
     for xml_path in xml_files:
         try:
-            rt = parse_recordtype(xml_path)
+            rt = parse_recordtype_from_file(xml_path)
             name_snake = to_snake_case(rt["name"])
             out_name = f"data-model-context-{name_snake}.md"
             out_path = out_dir / out_name
@@ -189,27 +193,86 @@ def process_directory(in_dir: Path, out_dir: Path) -> int:
     return count_ok
 
 
+def process_zip(zip_path: Path, internal_folder: str, out_dir: Path) -> int:
+    """Process XML files from within a zip archive."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    count_ok = 0
+    with ZipFile(zip_path, 'r') as zf:
+        # Normalize the internal folder path
+        folder = internal_folder.strip("/").strip("\\")
+        if folder and not folder.endswith("/"):
+            folder += "/"
+
+        # Find all XML files in the specified folder
+        xml_files = [
+            name for name in sorted(zf.namelist())
+            if name.startswith(folder) and name.lower().endswith(".xml") and "/" not in name[len(folder):]
+        ]
+
+        if not xml_files:
+            print(f"No .xml files found in zip folder: {folder or '(root)'}")
+            return 0
+
+        for xml_name in xml_files:
+            try:
+                with zf.open(xml_name) as xml_file:
+                    rt = parse_recordtype_from_file(BytesIO(xml_file.read()))
+                    name_snake = to_snake_case(rt["name"])
+                    out_name = f"data-model-context-{name_snake}.md"
+                    out_path = out_dir / out_name
+
+                    title = f"{rt['name']} Record Type Context Reference"
+                    md = render_markdown(rt, title)
+
+                    out_path.write_text(md, encoding="utf-8")
+                    print(f"OK: {xml_name} -> {out_path}")
+                    count_ok += 1
+            except Exception as e:
+                print(f"FAIL: {xml_name}: {e}")
+
+    return count_ok
+
+
 def main() -> int:
-    ap = argparse.ArgumentParser()
+    ap = argparse.ArgumentParser(
+        description="Process Appian recordTypeHaul XML files from a directory or zip archive"
+    )
     ap.add_argument(
-        "input_dir",
-        help="Directory containing Appian recordTypeHaul XML files",
+        "input_path",
+        help="Directory containing XML files OR path to zip file",
+    )
+    ap.add_argument(
+        "-f",
+        "--folder",
+        default="",
+        help="Folder path within the zip file containing XML files (only used if input is a zip)",
     )
     ap.add_argument(
         "-o",
         "--output_dir",
         default=None,
-        help="Directory to write markdown outputs. Defaults to input_dir.",
+        help="Directory to write markdown outputs. Defaults to current directory for zip, or input_path for directory.",
     )
     args = ap.parse_args()
 
-    in_dir = Path(args.input_dir).expanduser().resolve()
-    if not in_dir.exists() or not in_dir.is_dir():
-        raise SystemExit(f"Input directory does not exist or is not a directory: {in_dir}")
+    input_path = Path(args.input_path).expanduser().resolve()
 
-    out_dir = Path(args.output_dir).expanduser().resolve() if args.output_dir else in_dir
+    # Check if input is a zip file
+    if input_path.suffix.lower() == ".zip":
+        if not input_path.exists() or not input_path.is_file():
+            raise SystemExit(f"Zip file does not exist: {input_path}")
 
-    processed = process_directory(in_dir, out_dir)
+        out_dir = Path(args.output_dir).expanduser().resolve() if args.output_dir else Path.cwd()
+        processed = process_zip(input_path, args.folder, out_dir)
+    else:
+        # Regular directory
+        if not input_path.exists() or not input_path.is_dir():
+            raise SystemExit(f"Input directory does not exist or is not a directory: {input_path}")
+
+        out_dir = Path(args.output_dir).expanduser().resolve() if args.output_dir else input_path
+        processed = process_directory(input_path, out_dir)
+
     print(f"Processed: {processed} file(s)")
     return 0
 
